@@ -9,26 +9,19 @@ import { getAuthUserId } from "@convex-dev/auth/server";
  */
 export const getCurrentUser = query({
   args: {},
-  // Explicitly define the return type including the optional role
-  returns: v.union(v.null(), v.object({
-    _id: v.id("users"),
-    _creationTime: v.number(),
-    name: v.optional(v.string()),
-    email: v.optional(v.string()),
-    // Include other fields from authTables.users if necessary
-    role: v.optional(v.union(v.literal("consumer"), v.literal("business"))),
-  })),
   handler: async (ctx): Promise<Doc<"users"> | null> => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) {
       return null;
     }
+    // Fetch the full user document
     const user = await ctx.db.get(userId);
     if (!user) {
       // This should not happen if getAuthUserId returns an ID, but handle defensively
       console.error(`User document not found for authenticated userId: ${userId}`);
       return null;
     }
+    // The fetched user doc should now match the updated validator
     return user;
   },
 });
@@ -68,5 +61,68 @@ export const saveUserProfileEmbedding = internalMutation({
         await ctx.db.patch(userId, { profileEmbedding: embedding });
         console.log(`Patched user ${userId} profile embedding.`);
         return null;
+    },
+});
+
+/**
+ * Query: Get dishes from the user's history that haven't been reviewed yet.
+ */
+export const getUnratedDishes = query({
+    args: {},
+    returns: v.array(v.object({
+        historyId: v.id("userDishHistory"), // ID of the history entry
+        dishId: v.id("dishes"),
+        dishName: v.string(),
+        dishImage: v.union(v.string(), v.null()), // First image URL or null
+        restaurantName: v.string(),
+        timestamp: v.number(), // Timestamp from history entry
+    })),
+    handler: async (ctx) => {
+        const userId = await getAuthUserId(ctx);
+        if (!userId) {
+            return []; // Not logged in
+        }
+
+        const userHistory = await ctx.db
+            .query("userDishHistory")
+            .withIndex("by_user", q => q.eq("userId", userId))
+            .order("desc") // Get most recent first
+            .collect();
+
+        const unratedDishes = [];
+
+        for (const historyEntry of userHistory) {
+            // Check if a review exists for this user and dish
+            const existingReview = await ctx.db
+                .query("reviews")
+                .withIndex("by_user_dish", q => q.eq("userId", userId).eq("dishId", historyEntry.dishId))
+                .first(); // Check if at least one exists
+
+            // If no review exists, fetch details
+            if (!existingReview) {
+                const dish = await ctx.db.get(historyEntry.dishId);
+                if (dish) {
+                    const restaurant = await ctx.db.get(dish.restaurantId);
+                    if (restaurant) {
+                        // Get first image URL (async)
+                        let firstImageUrl: string | null = null;
+                        if (dish.imageIds && dish.imageIds.length > 0) {
+                            firstImageUrl = await ctx.storage.getUrl(dish.imageIds[0]);
+                        }
+
+                        unratedDishes.push({
+                            historyId: historyEntry._id,
+                            dishId: dish._id,
+                            dishName: dish.name,
+                            dishImage: firstImageUrl,
+                            restaurantName: restaurant.name,
+                            timestamp: historyEntry.timestamp,
+                        });
+                    }
+                }
+            }
+        }
+
+        return unratedDishes;
     },
 }); 

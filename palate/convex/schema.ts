@@ -1,71 +1,128 @@
 import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
-import { v } from "convex/values";
+import { type Infer, v } from "convex/values";
 
 // Define embedding dimension (e.g., for OpenAI text-embedding-3-small)
 const embeddingDimension = 1536;
 
+// Define TasteProfile validator based on frontend type
+const tasteProfileValidator = v.object({
+  sweet: v.number(),
+  salty: v.number(),
+  sour: v.number(),
+  bitter: v.number(),
+  umami: v.number(),
+  spicy: v.number(),
+});
+
+const dishValidator = v.object({
+  restaurantId: v.id("restaurants"),
+  name: v.string(),
+  description: v.optional(v.string()),
+  price: v.optional(v.number()), // Keep optional, handle default in frontend?
+  category: v.optional(v.string()),
+  // Use correct validator based on frontend type
+  tasteProfile: v.optional(tasteProfileValidator),
+  averageRating: v.optional(v.number()), // Add average rating
+  // reviews are linked via reviews.dishId
+  dietaryFlags: v.optional(v.array(v.string())), // Keep from previous schema
+  isAvailable: v.optional(v.boolean()), // Keep from previous schema
+  embedding: v.optional(v.array(v.float64())), // Keep embedding
+  imageIds: v.optional(v.array(v.id("_storage"))), // Keep multiple image IDs
+})
+
+
+export const dishWithImageUrlsValidator = v.object({
+  ...dishValidator.fields,
+  imageUrls: v.array(v.union(v.string(), v.null())),
+})
+
+export type FullDishReturn = Infer<typeof dishWithImageUrlsValidator>;
+
 const schema = defineSchema({
   ...authTables,
   users: defineTable({
-    ...authTables.users.validator.fields,
-    role: v.optional(v.union(v.literal("consumer"), v.literal("business"))),
-    // Add user profile embedding field
-    profileEmbedding: v.optional(v.array(v.float64())),
+    ...authTables.users.validator.fields, // includes name, email from auth
+    // Fields from frontend User type
+    phone: v.optional(v.string()),
+    avatar: v.optional(v.string()), // Assuming URL or identifier
+    tasteProfile: v.optional(tasteProfileValidator),
+    favoriteRestaurants: v.optional(v.array(v.id("restaurants"))),
+    favoriteDishes: v.optional(v.array(v.id("dishes"))),
+    recentlyViewed: v.optional(v.array(v.id("dishes"))), // Assuming dish IDs
+    // addresses: v.optional(v.array(v.id("addresses"))), // Add if addresses table is created
+    // orders: v.optional(v.array(v.id("orders"))), // Add if orders table is created
+    isBusinessOwner: v.optional(v.boolean()),
+    // ownedRestaurants: v.optional(v.array(v.id("restaurants"))), // Redundant? Use restaurants.ownerUserId index
+    // pendingRatings: v.optional(v.array(v.id("pendingRatings"))), // Add if pendingRatings table is created
+    // reviews: v.optional(v.array(v.id("reviews"))), // Relation handled via reviews table
+    // friends: v.optional(v.array(v.id("friends"))), // Add if friends table/relation is created
+    role: v.optional(v.union(v.literal("consumer"), v.literal("business"))), // Kept from previous schema
+    // image: v.optional(v.string()), // Replaced by avatar?
+    profileEmbedding: v.optional(v.array(v.float64())), // Keep embedding
   })
     .index("email", ["email"])
     // Add vector index for user profile
-    .vectorIndex("by_profile_embedding", { 
-        vectorField: "profileEmbedding", 
-        dimensions: embeddingDimension, 
-        filterFields: [] // No filters needed for now
+    .vectorIndex("by_profile_embedding", {
+      vectorField: "profileEmbedding",
+      dimensions: embeddingDimension,
+      filterFields: [] // No filters needed for now
     }),
 
   // Ensure restaurants table is defined
   restaurants: defineTable({
     ownerUserId: v.id("users"),
     name: v.string(),
+    // Add fields based on frontend Restaurant type
+    description: v.optional(v.string()),
+    image: v.optional(v.string()), // Single main image URL/ID?
+    coverImage: v.optional(v.string()), // Cover image URL/ID?
     address: v.optional(v.string()),
-    // Add other metadata as needed (e.g., cuisine type)
+    // distance: v.optional(v.string()), // Likely calculated, not stored
+    // deliveryTime: v.optional(v.string()), // Likely dynamic, not stored
+    deliveryFee: v.optional(v.number()),
+    rating: v.optional(v.number()), // Average rating?
+    reviewCount: v.optional(v.number()),
+    categories: v.optional(v.array(v.string())),
+    isOpen: v.optional(v.boolean()),
+    // dishes are linked via dishes.restaurantId
   })
     .index("by_owner", ["ownerUserId"]),
 
-  dishes: defineTable({
-    restaurantId: v.id("restaurants"),
-    name: v.string(),
-    description: v.optional(v.string()),
-    price: v.optional(v.number()),
-    tasteProfile: v.optional(v.object({
-      scores: v.object({
-        sweet: v.number(),
-        sour: v.number(),
-        salty: v.number(),
-        bitter: v.number(),
-        umami: v.number(),
-        spicy: v.number(),
-      }),
-      tags: v.array(v.string()),
-    })), // Keep taste profile for future use
-    // Add dish embedding field
-    embedding: v.optional(v.array(v.float64())),
-  })
+  dishes: defineTable(dishValidator)
     .index("by_restaurant", ["restaurantId"])
-    // Add vector index for dish embeddings
-    .vectorIndex("by_embedding", { 
-        vectorField: "embedding", 
-        dimensions: embeddingDimension, 
-        filterFields: ["restaurantId"] // Allow filtering by restaurant
+    .vectorIndex("by_embedding", {
+      vectorField: "embedding",
+      dimensions: embeddingDimension,
+      filterFields: ["restaurantId", "category", "dietaryFlags", "isAvailable"], // Keep filters
     }),
 
-  // Ensure user dish history table is defined
+  // Add reviews table based on frontend type
+  reviews: defineTable({
+    userId: v.id("users"),
+    dishId: v.id("dishes"), // Assuming reviews are per-dish
+    // restaurantId: v.optional(v.id("restaurants")), // Or per-restaurant?
+    rating: v.number(),
+    comment: v.optional(v.string()),
+    // userName: v.string(), // Denormalized? Fetch from user
+    // userAvatar: v.string(), // Denormalized? Fetch from user
+    timestamp: v.number(), // Use Convex creation time or explicit timestamp?
+  })
+    .index("by_dish", ["dishId"])
+    .index("by_user", ["userId"])
+    .index("by_user_dish", ["userId", "dishId"]),
+
+  // Keep userDishHistory for tracking likes/logs?
   userDishHistory: defineTable({
     userId: v.id("users"),
     dishId: v.id("dishes"),
-    liked: v.optional(v.boolean()), // Simple like/dislike for MVP
-    // removed comments: v.optional(v.string()), // Remove comments for MVP
-    timestamp: v.number(), // Record when they logged it
+    liked: v.optional(v.boolean()),
+    timestamp: v.number(),
   }).index("by_user", ["userId"])
     .index("by_user_dish", ["userId", "dishId"]),
+
+  // Define other tables like orders, addresses, pendingRatings, friends if needed
+  // ...
 
   // Remove the placeholder tasks table if no longer needed
   // tasks: defineTable({ text: v.string(), isCompleted: v.boolean() }),

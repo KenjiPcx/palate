@@ -3,6 +3,7 @@ import { action } from "./_generated/server";
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { dishWithImageUrlsValidator, type FullDishReturn } from "./schema";
 
 /**
  * Action: Get dish recommendations for the current user.
@@ -14,19 +15,8 @@ export const getRecommendations = action({
         limit: v.optional(v.number()),
     },
     // Return type matches dish structure
-    returns: v.array(
-        v.object({
-            _id: v.id("dishes"),
-            _creationTime: v.number(),
-            restaurantId: v.id("restaurants"),
-            name: v.string(),
-            description: v.optional(v.string()),
-            price: v.optional(v.number()),
-            embedding: v.optional(v.array(v.float64())),
-            // Add tasteProfile later if needed
-        })
-    ),
-    handler: async (ctx, args): Promise<Doc<"dishes">[]> => {
+    returns: v.array(dishWithImageUrlsValidator),
+    handler: async (ctx, args) => {
         const userId = await getAuthUserId(ctx);
         if (!userId) {
             // Not logged in, return empty recommendations
@@ -59,23 +49,23 @@ export const getRecommendations = action({
         // 4. Filter out rated dishes and get full documents
         const resultIds = results.map(r => r._id);
         // Fetch all potential dishes at once for efficiency
-        const potentialDishDocs = await ctx.runQuery(api.dishes.getDishesByIds, { dishIds: resultIds }); 
-        
+        const potentialDishDocs = await ctx.runQuery(api.dishes.getDishesByIds, { dishIds: resultIds });
+
         // Create a map for quick lookup
         const potentialDishesMap = new Map(potentialDishDocs
-            .filter((doc): doc is Doc<"dishes"> => doc !== null)
+            .filter((doc): doc is Doc<"dishes"> & { imageUrls: (string | null)[] } => doc !== null)
             .map(doc => [doc._id, doc])
         );
 
-        const recommendedDishes: Doc<"dishes">[] = [];
+        const recommendedDishes: FullDishReturn[] = [];
         // Iterate through the original vector search results to maintain order
         for (const result of results) {
             const dishDoc = potentialDishesMap.get(result._id);
             // Check if dish exists and is not rated
-            if (dishDoc && !ratedDishIds.has(dishDoc._id)) { 
+            if (dishDoc && !ratedDishIds.has(dishDoc._id)) {
                 recommendedDishes.push(dishDoc); // Push the found document
                 if (recommendedDishes.length >= (args.limit ?? 10)) {
-                    break; 
+                    break;
                 }
             }
         }

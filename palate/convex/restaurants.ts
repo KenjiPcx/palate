@@ -5,29 +5,17 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 
 /**
  * Creates a new restaurant entry linked to the authenticated user.
- * Throws an error if the user is not authenticated or if they already own a restaurant.
  */
 export const createRestaurant = mutation({
   args: {
     name: v.string(),
     address: v.optional(v.string()),
   },
-  returns: v.id("restaurants"), // Return the ID of the newly created restaurant
+  returns: v.id("restaurants"),
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) {
       throw new Error("User must be authenticated to create a restaurant.");
-    }
-
-    // Optional: Check if the user already owns a restaurant
-    const existingRestaurant = await ctx.db
-      .query("restaurants")
-      .withIndex("by_owner", (q) => q.eq("ownerUserId", userId))
-      .unique();
-
-    if (existingRestaurant) {
-      throw new Error("User already owns a restaurant.");
-      // Or return existingRestaurant._id if we want to allow viewing it
     }
 
     console.log(`Creating restaurant '${args.name}' for user ${userId}`);
@@ -43,30 +31,30 @@ export const createRestaurant = mutation({
 });
 
 /**
- * Retrieves the restaurant owned by the currently authenticated user.
- * Returns null if the user is not authenticated or does not own a restaurant.
+ * Retrieves all restaurants owned by the currently authenticated user.
  */
-export const getMyRestaurant = query({
+export const getMyRestaurants = query({
   args: {},
-  returns: v.union(v.null(), v.object({
+  returns: v.array(v.object({
       _id: v.id("restaurants"),
       _creationTime: v.number(),
       ownerUserId: v.id("users"),
       name: v.string(),
       address: v.optional(v.string()),
   })),
-  handler: async (ctx): Promise<Doc<"restaurants"> | null> => {
+  handler: async (ctx): Promise<Doc<"restaurants">[]> => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) {
-      return null;
+      return []; // Return empty array if not logged in
     }
 
-    const restaurant = await ctx.db
+    const restaurants = await ctx.db
       .query("restaurants")
       .withIndex("by_owner", (q) => q.eq("ownerUserId", userId))
-      .unique(); // Use unique() as a user should only own one restaurant
+      .order("desc") // Order by creation time or name?
+      .collect();
 
-    return restaurant;
+    return restaurants;
   },
 });
 
@@ -89,5 +77,45 @@ export const getAll = query({
     // Simple fetch all for MVP - add pagination later
     const restaurants = await ctx.db.query("restaurants").collect();
     return restaurants;
+  },
+});
+
+/**
+ * Retrieves a specific restaurant by its ID, but only if it's owned by the
+ * currently authenticated user. Returns null if the restaurant is not found
+ * or not owned by the user.
+ */
+export const getRestaurantForUser = query({
+  args: { restaurantId: v.id("restaurants") },
+  returns: v.union(v.null(), v.object({
+      _id: v.id("restaurants"),
+      _creationTime: v.number(),
+      ownerUserId: v.id("users"),
+      name: v.string(),
+      address: v.optional(v.string()),
+      menuImageUrl: v.optional(v.string()), // Keep fields consistent
+      menuImageId: v.optional(v.id("_storage")), // Keep fields consistent
+  })),
+  handler: async (ctx, args): Promise<Doc<"restaurants"> | null> => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      // Not logged in, can't own any restaurant
+      return null;
+    }
+
+    const restaurant = await ctx.db.get(args.restaurantId);
+
+    if (!restaurant) {
+      // Restaurant not found
+      return null;
+    }
+
+    // Check if the logged-in user is the owner
+    if (restaurant.ownerUserId !== userId) {
+      return null;
+    }
+
+    // Return the full restaurant object if owned by the user
+    return restaurant;
   },
 }); 

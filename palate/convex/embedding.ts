@@ -1,5 +1,5 @@
 "use node";
-import { v } from "convex/values";
+import { v, type Validator } from "convex/values";
 import { action, internalAction, internalMutation } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { embed } from "ai"; 
@@ -9,6 +9,16 @@ import type { Doc, Id } from "./_generated/dataModel";
 // Define embedding dimension (ensure consistency with schema)
 const embeddingDimension = 1536;
 
+// Re-import validator definition from ai.ts for use here
+const tasteScoresValidator = v.object({
+    sweet: v.optional(v.number()),
+    sour: v.optional(v.number()),
+    salty: v.optional(v.number()),
+    bitter: v.optional(v.number()),
+    umami: v.optional(v.number()),
+    spicy: v.optional(v.number()),
+});
+
 /**
  * Internal Action: Generate embedding for a single dish.
  */
@@ -17,12 +27,24 @@ export const generateDishEmbedding = internalAction({
     dishId: v.id("dishes"),
     name: v.string(),
     description: v.optional(v.string()),
+    tasteProfileScores: v.optional(tasteScoresValidator),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const textToEmbed = `${args.name}${args.description ? `: ${args.description}` : ''}`;
+    let textToEmbed = `${args.name}${args.description ? `: ${args.description}` : ''}`;
     
-    console.log(`Generating embedding for dish ${args.dishId}: "${textToEmbed.substring(0, 50)}..."`);
+    // Append taste scores to the text if available
+    if (args.tasteProfileScores) {
+        const scoresString = Object.entries(args.tasteProfileScores)
+            .filter(([, value]) => value !== undefined)
+            .map(([key, value]) => `${key}: ${value}`)
+            .join(", ");
+        if (scoresString) {
+            textToEmbed += ` | Taste: ${scoresString}`;
+        }
+    }
+    
+    console.log(`Generating embedding for dish ${args.dishId}: "${textToEmbed.substring(0, 100)}..."`);
 
     try {
         const { embedding } = await embed({

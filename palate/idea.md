@@ -87,3 +87,38 @@ To create a personalized food recommendation system that suggests specific dishe
 ## 8. Design / Theme
 
 * **Color Palette:** Lush Pink and Orange.
+
+
+Key features requested:
+1. Food ordering app with taste profiles for dishes
+2. Rating system for users to rate dishes
+3. Recommendation system based on taste profiles
+4. Dual mode: consumer view and business view
+5. Remove delivery distance focus (not a delivery app)
+6. Add restaurant creation feature
+7. Filter food by taste profiles
+8. Social aspect showing what friends with similar taste profiles are eating/liking
+9. Inbox for pending dish ratings after orders
+
+The most important files to modify would be:
+
+1. app/(tabs)/inbox.tsx - For the rating todos/inbox feature
+2. app/(tabs)/explore.tsx - For adding taste profile filters to food search
+3. app/(tabs)/index.tsx - For the home feed showing recommendations and friends' activities
+4. app/business/add-restaurant.tsx - For adding restaurants in business mode
+5. app/business/add-dish.tsx - For adding dishes with taste profiles
+6. app/rate-dish/[id].tsx - For rating dishes after orders
+7. store/userStore.ts - For managing user taste profiles and pending ratings
+8. components/TasteProfileRadar.tsx - For visualizing taste profiles
+9. app/(tabs)/profile.tsx - For the combined profile/settings screen
+10. app/dish/[id].tsx - For dish details with taste profile display
+- app/(tabs)/inbox.tsx
+- app/(tabs)/explore.tsx
+- app/(tabs)/index.tsx
+- app/business/add-restaurant.tsx
+- app/business/add-dish.tsx
+- app/rate-dish/[id].tsx
+- store/userStore.ts
+- components/TasteProfileRadar.tsx
+- app/(tabs)/profile.tsx
+- app/dish/[id].tsx

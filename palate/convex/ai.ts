@@ -1,42 +1,25 @@
-import { v } from "convex/values";
-import { Agent } from "@convex-dev/agent";
-import { api, internal, components } from "./_generated/api";
-import { action, internalAction, internalMutation } from "./_generated/server";
-import { openai } from "@ai-sdk/openai";
-import { z } from "zod";
+import { v, type Infer } from "convex/values";
+import { api, internal } from "./_generated/api";
+import { action, internalMutation, internalAction } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 
-// Define the expected structure for an extracted dish
-const dishSchema = z.object({
-    name: z.string().describe("The name of the dish."),
-    description: z.string().optional().describe("A brief description of the dish, if available."),
-    price: z.number().optional().describe("The price of the dish as a number, if available. Extract only the number."),
-    // We won't ask the AI to guess taste profiles initially, just extract core info.
+// Define the structure for taste scores matching the schema
+const tasteScoresValidator = v.object({
+    sweet: v.optional(v.number()),
+    sour: v.optional(v.number()),
+    salty: v.optional(v.number()),
+    bitter: v.optional(v.number()),
+    umami: v.optional(v.number()),
+    spicy: v.optional(v.number()),
 });
 
-// Define the agent for parsing menus
-const menuParserAgent = new Agent(components.agent, {
-    // Use a vision-capable model
-    chat: openai.chat("gpt-4o-mini"), 
-    // No embedding needed for this specific task
-    // Instructions to the model
-    instructions: 
-        `You are an expert menu analysis assistant. Given an image of a restaurant menu, 
-         extract all the individual dishes listed. For each dish, provide its name, 
-         description (if available), and price (if listed, as a numeric value). 
-         Focus only on extracting the information directly visible on the menu. 
-         Do not invent descriptions or prices. Ignore categories, headers, or non-dish text. 
-         Return the extracted dishes as an array of objects.`, 
-    // Define the expected output format using the Zod schema
-    // Removed the 'output' property
-});
-
-/**
- * Public action to trigger menu parsing using the agent.
- * Takes a storage ID for the menu image.
- * Returns the extracted dish data.
- */
-export const runMenuParser = menuParserAgent.asAction({});
+// Manually define the type for saved dish data to pass to the trigger
+type SavedDishForEmbedding = {
+    dishId: Id<"dishes">;
+    name: string;
+    description?: string;
+    tasteProfileScores?: Infer<typeof tasteScoresValidator> | undefined;
+};
 
 /**
  * Internal mutation to save the extracted dishes to the database
@@ -49,24 +32,43 @@ export const saveExtractedDishes = internalMutation({
             name: v.string(),
             description: v.optional(v.string()),
             price: v.optional(v.number()),
+            tasteProfileScores: v.optional(tasteScoresValidator),
         })),
     },
     returns: v.null(), // Keep return type as null
     handler: async (ctx, { restaurantId, dishes }) => { // Handler returns void/null
         console.log(`Saving ${dishes.length} dishes for restaurant ${restaurantId}`);
-        const savedDishesData: { dishId: Id<"dishes">; name: string; description?: string }[] = [];
+        // Explicitly type the array being collected
+        const savedDishesData: SavedDishForEmbedding[] = [];
+
         for (const dish of dishes) {
+            // Provide default scores if tasteProfileScores exists but specific scores are missing
+            const scoresToSave = dish.tasteProfileScores ? {
+                sweet: dish.tasteProfileScores.sweet ?? 0,
+                sour: dish.tasteProfileScores.sour ?? 0,
+                salty: dish.tasteProfileScores.salty ?? 0,
+                bitter: dish.tasteProfileScores.bitter ?? 0,
+                umami: dish.tasteProfileScores.umami ?? 0,
+                spicy: dish.tasteProfileScores.spicy ?? 0,
+            } : undefined;
+
             const newDishId = await ctx.db.insert("dishes", {
                 restaurantId: restaurantId,
                 name: dish.name,
                 description: dish.description,
                 price: dish.price,
+                tasteProfile: scoresToSave,
             });
-            // Collect data needed for embedding generation
-            savedDishesData.push({ dishId: newDishId, name: dish.name, description: dish.description });
+            savedDishesData.push({
+                dishId: newDishId,
+                name: dish.name,
+                description: dish.description,
+                // Pass the original optional scores object to the trigger
+                tasteProfileScores: dish.tasteProfileScores
+            });
         }
         console.log(`Finished saving ${savedDishesData.length} dishes for restaurant ${restaurantId}`);
-        
+
         // Schedule the next step (embedding generation) if dishes were saved
         if (savedDishesData.length > 0) {
             await ctx.scheduler.runAfter(0, internal.ai.triggerDishEmbeddingGeneration, {
@@ -79,26 +81,27 @@ export const saveExtractedDishes = internalMutation({
 
 /**
  * Internal Action: Trigger embedding generation for newly saved dishes.
- * Takes minimal dish data needed for embedding.
  */
 export const triggerDishEmbeddingGeneration = internalAction({
     args: {
-        // Adjust args to match data passed from scheduler
-        savedDishes: v.array(v.object({ 
-             dishId: v.id("dishes"),
-             name: v.string(),
-             description: v.optional(v.string()),
+        // Match the SavedDishForEmbedding type structure
+        savedDishes: v.array(v.object({
+            dishId: v.id("dishes"),
+            name: v.string(),
+            description: v.optional(v.string()),
+            tasteProfileScores: v.optional(tasteScoresValidator),
         }))
     },
     returns: v.null(),
     handler: async (ctx, { savedDishes }) => {
         console.log(`Triggering embedding generation for ${savedDishes.length} dishes.`);
         for (const dish of savedDishes) {
-            // Use correct internal path
+            // Pass taste scores to embedding action
             await ctx.runAction(internal.embedding.generateDishEmbedding, {
                 dishId: dish.dishId,
                 name: dish.name,
                 description: dish.description,
+                tasteProfileScores: dish.tasteProfileScores, // Pass scores
             });
         }
         // Use plain string

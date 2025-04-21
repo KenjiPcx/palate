@@ -12,11 +12,13 @@ import type * as ai from "../ai.js";
 import type * as auth from "../auth.js";
 import type * as dishes from "../dishes.js";
 import type * as embedding from "../embedding.js";
+import type * as feed from "../feed.js";
 import type * as history from "../history.js";
 import type * as http from "../http.js";
 import type * as menus from "../menus.js";
 import type * as recommendations from "../recommendations.js";
 import type * as restaurants from "../restaurants.js";
+import type * as reviews from "../reviews.js";
 import type * as users from "../users.js";
 
 import type {
@@ -38,11 +40,13 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   dishes: typeof dishes;
   embedding: typeof embedding;
+  feed: typeof feed;
   history: typeof history;
   http: typeof http;
   menus: typeof menus;
   recommendations: typeof recommendations;
   restaurants: typeof restaurants;
+  reviews: typeof reviews;
   users: typeof users;
 }>;
 declare const fullApiWithMounts: typeof fullApi;
