@@ -1,41 +1,75 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  ScrollView, 
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
   TextInput,
   TouchableOpacity,
   Image,
   Alert,
-  Slider,
+  ActivityIndicator,
+  FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Image as ImageIcon, X, Trash2 } from 'lucide-react-native';
+import { Image as ImageIcon, X, Trash2, PlusCircle } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import colors from '@/constants/colors';
-import { useRestaurantStore } from '@/store/restaurantStore';
 import { Button } from '@/components/Button';
 import { TasteProfileRadar } from '@/components/TasteProfileRadar';
 import type { TasteProfile } from '@/types';
+import { useQuery, useMutation, useAction } from 'convex/react';
+import { api } from '@/convex/_generated/api';
+import type { Id } from '@/convex/_generated/dataModel';
+
+async function uploadFile(uploadUrl: string, fileUri: string): Promise<Id<"_storage">> {
+  const response = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'image/jpeg' },
+    body: await fetch(fileUri).then(res => res.blob()),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Upload failed: ${response.status} ${response.statusText} - ${errorBody}`);
+  }
+
+  const { storageId } = await response.json();
+  if (!storageId) {
+    throw new Error("Upload succeeded but storageId not found in response.");
+  }
+  return storageId as Id<"_storage">;
+}
+
+interface ImageState {
+  url: string | null;
+  storageId?: Id<"_storage">;
+  uri?: string;
+}
 
 export default function EditDishScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { getDishById, getRestaurantById, updateDish, deleteDish } = useRestaurantStore();
-  
-  const dish = getDishById(id);
-  const restaurant = dish ? getRestaurantById(dish.restaurantId) : null;
-  
+  const dishId = id as Id<"dishes">;
+
+  const dishData = useQuery(api.dishes.getDishById, dishId ? { dishId } : 'skip');
+  const updateDishAction = useAction(api.dishes.updateDishAction);
+  const linkAndUpdateMutation = useMutation(api.dishes.linkDishImagesAndUpdate);
+  const deleteDishMutation = useMutation(api.dishes.deleteDish);
+
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [price, setPrice] = useState('');
   const [category, setCategory] = useState('');
-  const [image, setImage] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isAvailable, setIsAvailable] = useState(true);
+  const [dietaryFlags, setDietaryFlags] = useState<string[]>([]);
+
+  const [images, setImages] = useState<ImageState[]>([]);
+
+  const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  
+
   const [tasteProfile, setTasteProfile] = useState<TasteProfile>({
     sweet: 0.5,
     salty: 0.5,
@@ -44,120 +78,201 @@ export default function EditDishScreen() {
     umami: 0.5,
     spicy: 0.5,
   });
-  
+
   useEffect(() => {
-    if (dish) {
-      setName(dish.name);
-      setDescription(dish.description);
-      setPrice(dish.price.toString());
-      setCategory(dish.category);
-      setImage(dish.image);
-      setTasteProfile(dish.tasteProfile);
+    if (dishData) {
+      setName(dishData.name ?? '');
+      setDescription(dishData.description ?? '');
+      setPrice(dishData.price?.toString() ?? '');
+      setCategory(dishData.category ?? '');
+      setIsAvailable(dishData.isAvailable ?? true);
+      setDietaryFlags(dishData.dietaryFlags ?? []);
+      setTasteProfile(dishData.tasteProfile ?? { sweet: 0.5, salty: 0.5, sour: 0.5, bitter: 0.5, umami: 0.5, spicy: 0.5 });
+
+      const initialImages: ImageState[] = (dishData.imageIds ?? []).map((id, index) => ({
+        storageId: id,
+        url: dishData.imageUrls?.[index] ?? null,
+      }));
+      setImages(initialImages);
     }
-  }, [dish]);
-  
-  if (!dish || !restaurant) {
+  }, [dishData]);
+
+  if (dishData === undefined) {
     return (
-      <View style={styles.notFoundContainer}>
-        <Text style={styles.notFoundText}>Dish not found</Text>
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text>Loading dish...</Text>
       </View>
     );
   }
-  
-  const handlePickImage = async () => {
+
+  if (dishData === null) {
+    return (
+      <View style={styles.notFoundContainer}>
+        <Text style={styles.notFoundText}>Dish not found or access denied.</Text>
+        <Button title="Go Back" onPress={() => router.back()} />
+      </View>
+    );
+  }
+
+  const handleAddImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
-      aspect: [4, 3],
-      quality: 1,
+      aspect: [1, 1],
+      quality: 0.8,
     });
-    
-    if (!result.canceled) {
-      setImage(result.assets[0].uri);
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const newUri = result.assets[0].uri;
+      setImages(prev => [...prev, { url: newUri, uri: newUri }]);
     }
   };
-  
+
+  const handleRemoveImage = (indexToRemove: number) => {
+    setImages(prev => prev.filter((_, index) => index !== indexToRemove));
+  };
+
   const handleTasteProfileChange = (taste: keyof TasteProfile, value: number) => {
     setTasteProfile(prev => ({
       ...prev,
       [taste]: value,
     }));
   };
-  
-  const handleSubmit = () => {
-    if (!name || !description || !price || !category || !image) {
-      Alert.alert('Error', 'Please fill in all fields and add an image');
+
+  const handleSubmit = async () => {
+    if (!name || !description || !price || !category) {
+      Alert.alert('Error', 'Please fill in Name, Description, Price, and Category.');
       return;
     }
-    
-    const priceValue = parseFloat(price);
-    if (isNaN(priceValue) || priceValue <= 0) {
+
+    const priceValue = Number.parseFloat(price);
+    if (Number.isNaN(priceValue) || priceValue <= 0) {
       Alert.alert('Error', 'Please enter a valid price');
       return;
     }
-    
-    setIsLoading(true);
-    
-    // Simulate API call
-    setTimeout(() => {
-      const updatedDish = {
-        name,
-        description,
-        price: priceValue,
-        image,
-        tasteProfile,
-        category,
-      };
-      
-      updateDish(dish.restaurantId, dish.id, updatedDish);
-      setIsLoading(false);
-      
+
+    if (images.length === 0) {
+      Alert.alert('Error', 'Please add at least one image for the dish.');
+      return;
+    }
+
+    setIsSaving(true);
+
+    try {
+      const imagesToUpload = images.filter(img => img.uri && !img.storageId);
+      const existingImageIds = images.filter(img => img.storageId).map(img => img.storageId as Id<"_storage">);
+      let uploadedImageIds: Id<"_storage">[] = [];
+
+      if (imagesToUpload.length > 0) {
+        console.log(`Requesting ${imagesToUpload.length} upload URLs...`);
+        const { uploadUrls } = await updateDishAction({
+          dishId,
+          newImageCount: imagesToUpload.length,
+        });
+        console.log("Received URLs:", uploadUrls);
+
+        if (uploadUrls.length !== imagesToUpload.length) {
+          throw new Error("Mismatch between requested and received upload URLs.");
+        }
+
+        const uploadPromises = imagesToUpload.map((imageState, index) => {
+          console.log(`Uploading new image ${index + 1}...`);
+          if (!imageState.uri) {
+            console.error(`Image ${index + 1} is missing URI for upload.`);
+            throw new Error(`Image ${index + 1} is missing URI.`);
+          }
+          return uploadFile(uploadUrls[index], imageState.uri)
+            .then(storageId => {
+              console.log(`Image ${index + 1} upload successful, storageId:`, storageId);
+              return storageId;
+            })
+            .catch(err => {
+              console.error(`Image ${index + 1} upload failed:`, err);
+              throw new Error(`Failed to upload image ${index + 1}.`);
+            });
+        });
+
+        uploadedImageIds = await Promise.all(uploadPromises);
+        console.log("Uploads complete. New Storage IDs:", uploadedImageIds);
+      }
+
+      const finalImageIds = [...existingImageIds, ...uploadedImageIds];
+      console.log("Final image IDs to save:", finalImageIds);
+
+      console.log("Calling linkDishImagesAndUpdate mutation...");
+      await linkAndUpdateMutation({
+        dishId,
+        name: name !== dishData.name ? name : undefined,
+        description: description !== dishData.description ? description : undefined,
+        price: priceValue !== dishData.price ? priceValue : undefined,
+        category: category !== dishData.category ? category : undefined,
+        tasteProfile: JSON.stringify(tasteProfile) !== JSON.stringify(dishData.tasteProfile) ? tasteProfile : undefined,
+        dietaryFlags: JSON.stringify(dietaryFlags) !== JSON.stringify(dishData.dietaryFlags) ? dietaryFlags : undefined,
+        isAvailable: isAvailable !== dishData.isAvailable ? isAvailable : undefined,
+        imageIds: finalImageIds,
+      });
+      console.log("linkDishImagesAndUpdate successful.");
+
       Alert.alert(
         'Success',
         'Dish updated successfully',
-        [
-          {
-            text: 'OK',
-            onPress: () => router.back(),
-          },
-        ]
+        [{ text: 'OK', onPress: () => router.back() }]
       );
-    }, 1500);
+
+    } catch (error) {
+      console.error('Failed to update dish:', error);
+      Alert.alert('Error', `Failed to update dish: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setIsSaving(false);
+    }
   };
-  
+
   const handleDelete = () => {
     Alert.alert(
       'Delete Dish',
       'Are you sure you want to delete this dish? This action cannot be undone.',
       [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
+        { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => {
+          onPress: async () => {
             setIsDeleting(true);
-            
-            // Simulate API call
-            setTimeout(() => {
-              deleteDish(dish.restaurantId, dish.id);
-              setIsDeleting(false);
+            try {
+              await deleteDishMutation({ dishId });
+              Alert.alert('Deleted', 'Dish successfully deleted.');
               router.back();
-            }, 1000);
+            } catch (error) {
+              console.error('Failed to delete dish:', error);
+              Alert.alert('Error', `Failed to delete dish: ${error instanceof Error ? error.message : String(error)}`);
+              setIsDeleting(false);
+            }
           },
         },
       ]
     );
   };
-  
+
+  const renderImageItem = ({ item, index }: { item: ImageState; index: number }) => (
+    <View style={styles.imageListItem}>
+      <Image source={{ uri: item.url ?? undefined }} style={styles.imagePreview} />
+      <TouchableOpacity
+        style={styles.removeImageButton}
+        onPress={() => handleRemoveImage(index)}
+        disabled={isSaving || isDeleting}
+      >
+        <X size={16} color={colors.white} />
+      </TouchableOpacity>
+    </View>
+  );
+
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Dish Information</Text>
-          
+
           <View style={styles.formGroup}>
             <Text style={styles.label}>Name</Text>
             <TextInput
@@ -165,9 +280,10 @@ export default function EditDishScreen() {
               value={name}
               onChangeText={setName}
               placeholder="Dish name"
+              editable={!isSaving && !isDeleting}
             />
           </View>
-          
+
           <View style={styles.formGroup}>
             <Text style={styles.label}>Description</Text>
             <TextInput
@@ -177,9 +293,10 @@ export default function EditDishScreen() {
               placeholder="Describe your dish"
               multiline
               numberOfLines={4}
+              editable={!isSaving && !isDeleting}
             />
           </View>
-          
+
           <View style={styles.formGroup}>
             <Text style={styles.label}>Price ($)</Text>
             <TextInput
@@ -188,9 +305,10 @@ export default function EditDishScreen() {
               onChangeText={setPrice}
               placeholder="0.00"
               keyboardType="decimal-pad"
+              editable={!isSaving && !isDeleting}
             />
           </View>
-          
+
           <View style={styles.formGroup}>
             <Text style={styles.label}>Category</Text>
             <TextInput
@@ -198,164 +316,91 @@ export default function EditDishScreen() {
               value={category}
               onChangeText={setCategory}
               placeholder="e.g. Appetizer, Main Course, Dessert"
+              editable={!isSaving && !isDeleting}
             />
           </View>
         </View>
-        
+
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Dish Image</Text>
-          
-          {image ? (
-            <View style={styles.imagePreviewContainer}>
-              <Image 
-                source={{ uri: image }} 
-                style={styles.imagePreview} 
-              />
-              <TouchableOpacity 
-                style={styles.removeImageButton}
-                onPress={() => setImage(null)}
+          <Text style={styles.sectionTitle}>Dish Images</Text>
+
+          <FlatList
+            data={images}
+            renderItem={renderImageItem}
+            keyExtractor={(item, index) => item.storageId ?? `new-${index}`}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.imageList}
+            ListFooterComponent={() => (
+              <TouchableOpacity
+                style={styles.addImageButton}
+                onPress={handleAddImage}
+                disabled={isSaving || isDeleting}
               >
-                <X size={16} color={colors.white} />
+                <PlusCircle size={30} color={colors.primary} />
+                <Text style={styles.addImageText}>Add</Text>
               </TouchableOpacity>
-            </View>
-          ) : (
-            <TouchableOpacity 
-              style={styles.imagePicker}
-              onPress={handlePickImage}
-            >
-              <ImageIcon size={24} color={colors.textLight} />
-              <Text style={styles.imagePickerText}>Upload Dish Image</Text>
-            </TouchableOpacity>
-          )}
+            )}
+          />
         </View>
-        
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Taste Profile</Text>
           <Text style={styles.sectionDescription}>
             Adjust the sliders to set the taste profile of your dish
           </Text>
-          
+
           <View style={styles.tasteProfileContainer}>
-            <TasteProfileRadar 
-              tasteProfile={tasteProfile} 
+            <TasteProfileRadar
+              tasteProfile={tasteProfile}
               showValues
+              size={250}
             />
           </View>
-          
+
           <View style={styles.slidersContainer}>
-            <View style={styles.sliderItem}>
-              <Text style={styles.sliderLabel}>Sweet</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0}
-                maximumValue={1}
-                step={0.1}
-                value={tasteProfile.sweet}
-                onValueChange={(value) => handleTasteProfileChange('sweet', value)}
-                minimumTrackTintColor={colors.primary}
-                maximumTrackTintColor={colors.border}
-                thumbTintColor={colors.primary}
-              />
-              <Text style={styles.sliderValue}>{Math.round(tasteProfile.sweet * 10)}</Text>
-            </View>
-            
-            <View style={styles.sliderItem}>
-              <Text style={styles.sliderLabel}>Salty</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0}
-                maximumValue={1}
-                step={0.1}
-                value={tasteProfile.salty}
-                onValueChange={(value) => handleTasteProfileChange('salty', value)}
-                minimumTrackTintColor={colors.primary}
-                maximumTrackTintColor={colors.border}
-                thumbTintColor={colors.primary}
-              />
-              <Text style={styles.sliderValue}>{Math.round(tasteProfile.salty * 10)}</Text>
-            </View>
-            
-            <View style={styles.sliderItem}>
-              <Text style={styles.sliderLabel}>Sour</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0}
-                maximumValue={1}
-                step={0.1}
-                value={tasteProfile.sour}
-                onValueChange={(value) => handleTasteProfileChange('sour', value)}
-                minimumTrackTintColor={colors.primary}
-                maximumTrackTintColor={colors.border}
-                thumbTintColor={colors.primary}
-              />
-              <Text style={styles.sliderValue}>{Math.round(tasteProfile.sour * 10)}</Text>
-            </View>
-            
-            <View style={styles.sliderItem}>
-              <Text style={styles.sliderLabel}>Bitter</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0}
-                maximumValue={1}
-                step={0.1}
-                value={tasteProfile.bitter}
-                onValueChange={(value) => handleTasteProfileChange('bitter', value)}
-                minimumTrackTintColor={colors.primary}
-                maximumTrackTintColor={colors.border}
-                thumbTintColor={colors.primary}
-              />
-              <Text style={styles.sliderValue}>{Math.round(tasteProfile.bitter * 10)}</Text>
-            </View>
-            
-            <View style={styles.sliderItem}>
-              <Text style={styles.sliderLabel}>Umami</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0}
-                maximumValue={1}
-                step={0.1}
-                value={tasteProfile.umami}
-                onValueChange={(value) => handleTasteProfileChange('umami', value)}
-                minimumTrackTintColor={colors.primary}
-                maximumTrackTintColor={colors.border}
-                thumbTintColor={colors.primary}
-              />
-              <Text style={styles.sliderValue}>{Math.round(tasteProfile.umami * 10)}</Text>
-            </View>
-            
-            <View style={styles.sliderItem}>
-              <Text style={styles.sliderLabel}>Spicy</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0}
-                maximumValue={1}
-                step={0.1}
-                value={tasteProfile.spicy}
-                onValueChange={(value) => handleTasteProfileChange('spicy', value)}
-                minimumTrackTintColor={colors.primary}
-                maximumTrackTintColor={colors.border}
-                thumbTintColor={colors.primary}
-              />
-              <Text style={styles.sliderValue}>{Math.round(tasteProfile.spicy * 10)}</Text>
-            </View>
+            {Object.keys(tasteProfile).map((key) => (
+              <View key={key} style={styles.sliderItem}>
+                <Text style={styles.sliderLabel}>{key.charAt(0).toUpperCase() + key.slice(1)}</Text>
+                <TextInput
+                  style={styles.sliderValueInput}
+                  value={tasteProfile[key as keyof TasteProfile].toFixed(2)}
+                  onChangeText={(text) => {
+                    const numValue = Number.parseFloat(text);
+                    if (!Number.isNaN(numValue) && numValue >= 0 && numValue <= 1) {
+                      handleTasteProfileChange(key as keyof TasteProfile, numValue);
+                    }
+                  }}
+                  keyboardType="numeric"
+                  editable={!isSaving && !isDeleting}
+                />
+              </View>
+            ))}
           </View>
         </View>
-        
-        <TouchableOpacity 
-          style={styles.deleteButton}
+
+        <TouchableOpacity
+          style={[styles.deleteButton, (isDeleting || isSaving) && styles.disabledButton]}
           onPress={handleDelete}
-          disabled={isDeleting}
+          disabled={isDeleting || isSaving}
         >
-          <Trash2 size={20} color={colors.white} />
-          <Text style={styles.deleteButtonText}>Delete Dish</Text>
+          {isDeleting ? (
+            <ActivityIndicator color={colors.white} />
+          ) : (
+            <>
+              <Trash2 size={20} color={colors.white} />
+              <Text style={styles.deleteButtonText}>Delete Dish</Text>
+            </>
+          )}
         </TouchableOpacity>
       </ScrollView>
-      
+
       <View style={styles.footer}>
         <Button
           title="Save Changes"
           onPress={handleSubmit}
-          loading={isLoading}
+          loading={isSaving}
+          disabled={isSaving || isDeleting || dishData === undefined}
         />
       </View>
     </SafeAreaView>
@@ -367,136 +412,165 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+  },
+  notFoundContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: colors.background,
+  },
+  notFoundText: {
+    fontSize: 18,
+    color: colors.text,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
   section: {
-    backgroundColor: colors.white,
-    marginBottom: 16,
-    padding: 16,
+    marginHorizontal: 20,
+    marginVertical: 15,
+    padding: 20,
+    backgroundColor: colors.card,
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 3,
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: 'bold',
     color: colors.text,
-    marginBottom: 8,
+    marginBottom: 15,
   },
   sectionDescription: {
     fontSize: 14,
     color: colors.textLight,
-    marginBottom: 16,
+    marginBottom: 15,
   },
   formGroup: {
-    marginBottom: 16,
+    marginBottom: 15,
   },
   label: {
     fontSize: 14,
-    fontWeight: '500',
-    color: colors.text,
-    marginBottom: 8,
+    color: colors.textLight,
+    marginBottom: 5,
   },
   input: {
+    backgroundColor: colors.white,
+    borderRadius: 8,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: colors.text,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    color: colors.text,
   },
   textArea: {
     minHeight: 100,
     textAlignVertical: 'top',
   },
-  imagePicker: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
-    borderStyle: 'dashed',
-    padding: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
+  imageList: {
+    marginBottom: 15,
   },
-  imagePickerText: {
-    fontSize: 14,
-    color: colors.textLight,
-    marginTop: 8,
-  },
-  imagePreviewContainer: {
+  imageListItem: {
+    marginRight: 10,
     position: 'relative',
   },
   imagePreview: {
-    width: '100%',
-    height: 200,
+    width: 100,
+    height: 100,
     borderRadius: 8,
+    backgroundColor: colors.white,
   },
   removeImageButton: {
     position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
+    top: -5,
+    right: -5,
+    backgroundColor: colors.error,
+    borderRadius: 15,
+    width: 24,
+    height: 24,
     justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  addImageButton: {
+    width: 100,
+    height: 100,
+    borderRadius: 8,
+    backgroundColor: colors.white,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderStyle: 'dashed',
+  },
+  addImageText: {
+    marginTop: 5,
+    color: colors.primary,
+    fontSize: 14,
   },
   tasteProfileContainer: {
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 20,
+    minHeight: 260,
   },
   slidersContainer: {
-    marginTop: 16,
+    marginTop: 10,
   },
   sliderItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 10,
   },
   sliderLabel: {
-    width: 50,
+    width: 60,
     fontSize: 14,
     color: colors.text,
+    marginRight: 10,
   },
-  slider: {
+  sliderValueInput: {
     flex: 1,
     height: 40,
-  },
-  sliderValue: {
-    width: 30,
-    textAlign: 'right',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 5,
+    paddingHorizontal: 10,
     fontSize: 14,
-    color: colors.text,
+    marginLeft: 10,
+    textAlign: 'center',
   },
   deleteButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.error,
-    paddingVertical: 12,
-    marginHorizontal: 16,
-    marginBottom: 16,
+    paddingVertical: 15,
     borderRadius: 8,
+    marginHorizontal: 20,
+    marginTop: 10,
+    marginBottom: 20,
   },
   deleteButtonText: {
-    fontSize: 16,
-    fontWeight: '500',
     color: colors.white,
-    marginLeft: 8,
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginLeft: 10,
+  },
+  disabledButton: {
+    opacity: 0.7,
   },
   footer: {
-    backgroundColor: colors.white,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
+    padding: 20,
     borderTopWidth: 1,
     borderTopColor: colors.border,
-  },
-  notFoundContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  notFoundText: {
-    fontSize: 18,
-    fontWeight: '500',
-    color: colors.text,
+    backgroundColor: colors.card,
   },
 });

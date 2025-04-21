@@ -1,20 +1,21 @@
-import React from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  ScrollView, 
-  Image, 
+import React, { useMemo } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  Image,
   TouchableOpacity,
   FlatList,
   Switch,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { 
-  Heart, 
-  Star, 
+import {
+  Heart,
+  Star,
   ChevronRight,
   Edit2,
   User,
@@ -26,23 +27,40 @@ import {
   LogOut,
 } from 'lucide-react-native';
 import colors from '@/constants/colors';
-import { useUserStore } from '@/store/userStore';
-import { useRestaurantStore } from '@/store/restaurantStore';
 import { TasteProfileRadar } from '@/components/TasteProfileRadar';
 import { DishCard } from '@/components/DishCard';
 import { SectionHeader } from '@/components/SectionHeader';
-import { CartButton } from '@/components/CartButton';
 import { ModeToggle } from '@/components/ModeToggle';
+import type { Id } from '@/convex/_generated/dataModel';
+import { useQuery } from 'convex/react';
+import { api } from '@/convex/_generated/api';
+import { useAuthActions } from '@convex-dev/auth/react';
+import type { FullDishReturn } from '@/convex/schema';
+import type { TasteProfile } from '@/types';
+
+const defaultTasteProfile: TasteProfile = {
+  sweet: 0.5,
+  salty: 0.5,
+  sour: 0.5,
+  bitter: 0.5,
+  umami: 0.5,
+  spicy: 0.5,
+};
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const user = useUserStore(state => state.user);
-  const { isBusinessMode } = useUserStore();
-  const { getDishById } = useRestaurantStore();
+  const user = useQuery(api.users.getCurrentUser);
+  const { signOut } = useAuthActions();
   const [notificationsEnabled, setNotificationsEnabled] = React.useState(true);
-  
-  const favoriteDishes = user?.favoriteDishes.map(id => getDishById(id)).filter(Boolean) || [];
-  
+
+  const favoriteDishIds = user?.favoriteDishes ?? [];
+  const favoriteDishesQuery = useQuery(
+    api.dishes.getDishesByIds,
+    favoriteDishIds.length > 0 ? { dishIds: favoriteDishIds } : 'skip'
+  );
+
+  const favoriteDishes = favoriteDishesQuery?.filter(d => d !== null) ?? [];
+
   const handleLogout = () => {
     Alert.alert(
       'Logout',
@@ -55,8 +73,14 @@ export default function ProfileScreen() {
         {
           text: 'Logout',
           style: 'destructive',
-          onPress: () => {
-            // Implement logout
+          onPress: async () => {
+            try {
+              await signOut();
+              console.log('User signed out');
+            } catch (error) {
+              console.error('Logout failed:', error);
+              Alert.alert('Logout Failed', 'Could not log out. Please try again.');
+            }
           },
         },
       ]
@@ -66,59 +90,79 @@ export default function ProfileScreen() {
   const handleAddRestaurant = () => {
     router.push('/business/add-restaurant');
   };
-  
+
+  if (user === undefined) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (user === null) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.loadingContainer}>
+          <Text>Please log in.</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View style={styles.profileHeader}>
-            <Image 
-              source={{ uri: user?.avatar }} 
-              style={styles.avatar} 
+            <Image
+              source={{ uri: user.avatar || 'https://via.placeholder.com/70' }}
+              style={styles.avatar}
             />
             <View style={styles.profileInfo}>
-              <Text style={styles.name}>{user?.name}</Text>
-              <Text style={styles.email}>{user?.email}</Text>
+              <Text style={styles.name}>{user.name}</Text>
+              <Text style={styles.email}>{user.email}</Text>
             </View>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.editButton}
-              onPress={() => {}}
+              onPress={() => { }}
             >
               <Edit2 size={16} color={colors.white} />
             </TouchableOpacity>
           </View>
-          
+
           <View style={styles.statsContainer}>
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>{user?.orders.length || 0}</Text>
+              <Text style={styles.statValue}>0</Text>
               <Text style={styles.statLabel}>Orders</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>{user?.favoriteRestaurants.length || 0}</Text>
+              <Text style={styles.statValue}>{user.favoriteRestaurants?.length || 0}</Text>
               <Text style={styles.statLabel}>Favorites</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>{user?.reviews?.length || 0}</Text>
+              <Text style={styles.statValue}>0</Text>
               <Text style={styles.statLabel}>Reviews</Text>
             </View>
           </View>
         </View>
-        
+
         <View style={styles.section}>
           <SectionHeader title="App Mode" />
           <View style={styles.modeToggleContainer}>
             <ModeToggle />
           </View>
           <Text style={styles.sectionDescription}>
-            {isBusinessMode 
-              ? 'Business mode allows you to manage your restaurants and menus' 
+            {user.role === 'business'
+              ? 'Business mode allows you to manage your restaurants and menus'
               : 'Consumer mode allows you to browse and order food'}
           </Text>
-          
-          {isBusinessMode && (
-            <TouchableOpacity 
+
+          {user.role === 'business' && (
+            <TouchableOpacity
               style={styles.addRestaurantButton}
               onPress={handleAddRestaurant}
             >
@@ -126,43 +170,62 @@ export default function ProfileScreen() {
             </TouchableOpacity>
           )}
         </View>
-        
+
         <View style={styles.section}>
           <SectionHeader title="Your Taste Profile" />
           <View style={styles.tasteProfileContainer}>
-            <TasteProfileRadar 
-              tasteProfile={user?.tasteProfile || {
-                sweet: 0.5,
-                salty: 0.5,
-                sour: 0.5,
-                bitter: 0.5,
-                umami: 0.5,
-                spicy: 0.5,
-              }} 
+            <TasteProfileRadar
+              tasteProfile={user.tasteProfile || defaultTasteProfile}
               showValues
             />
           </View>
         </View>
-        
+
         <View style={styles.section}>
-          <SectionHeader 
-            title="Favorite Dishes" 
-            onSeeAll={() => {}}
+          <SectionHeader
+            title="Favorite Dishes"
+            onSeeAll={() => { /* TODO: Navigate to favorites screen */ }}
           />
-          {favoriteDishes.length > 0 ? (
+          {favoriteDishesQuery === undefined && favoriteDishIds.length > 0 && (
+            <ActivityIndicator color={colors.primary} style={{ marginVertical: 20 }} />
+          )}
+          {favoriteDishesQuery !== undefined && favoriteDishes.length > 0 && (
             <FlatList
               data={favoriteDishes}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <View style={styles.dishCardContainer}>
-                  <DishCard dish={item} />
-                </View>
-              )}
+              keyExtractor={(item) => item?._id.toString() ?? Math.random().toString()}
+              renderItem={({ item }) => {
+                if (!item) {
+                  return null;
+                }
+
+                const mappedDishData = {
+                  id: item._id.toString(),
+                  name: item.name,
+                  description: item.description ?? '',
+                  image: item.imageUrls?.[0] || 'https://via.placeholder.com/150',
+                  restaurantName: 'Restaurant Name',
+                  tasteProfile: item.tasteProfile ?? defaultTasteProfile,
+                  price: item.price ?? 0,
+                  category: item.category ?? 'Unknown',
+                  reviews: [],
+                  averageRating: item.averageRating ?? 0,
+                  restaurantId: item.restaurantId.toString(),
+                };
+                return (
+                  <View style={styles.dishCardContainer}>
+                    <DishCard
+                      dish={mappedDishData}
+                      onPress={() => router.push(`/dish/${item._id}`)}
+                    />
+                  </View>
+                );
+              }}
               horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.horizontalList}
             />
-          ) : (
+          )}
+          {(favoriteDishesQuery !== undefined && favoriteDishes.length === 0) || favoriteDishIds.length === 0 && (
             <View style={styles.emptyContainer}>
               <Heart size={40} color={colors.primary} />
               <Text style={styles.emptyText}>No favorite dishes yet</Text>
@@ -172,7 +235,7 @@ export default function ProfileScreen() {
             </View>
           )}
         </View>
-        
+
         <View style={styles.section}>
           <SectionHeader title="Account" />
           <TouchableOpacity style={styles.settingItem}>
@@ -184,7 +247,7 @@ export default function ProfileScreen() {
             </View>
             <ChevronRight size={20} color={colors.textLight} />
           </TouchableOpacity>
-          
+
           <TouchableOpacity style={styles.settingItem}>
             <View style={styles.settingIconContainer}>
               <CreditCard size={20} color={colors.primary} />
@@ -194,7 +257,7 @@ export default function ProfileScreen() {
             </View>
             <ChevronRight size={20} color={colors.textLight} />
           </TouchableOpacity>
-          
+
           <TouchableOpacity style={styles.settingItem}>
             <View style={styles.settingIconContainer}>
               <MapPin size={20} color={colors.primary} />
@@ -205,7 +268,7 @@ export default function ProfileScreen() {
             <ChevronRight size={20} color={colors.textLight} />
           </TouchableOpacity>
         </View>
-        
+
         <View style={styles.section}>
           <SectionHeader title="Preferences" />
           <View style={styles.settingItem}>
@@ -223,7 +286,7 @@ export default function ProfileScreen() {
             />
           </View>
         </View>
-        
+
         <View style={styles.section}>
           <SectionHeader title="Support" />
           <TouchableOpacity style={styles.settingItem}>
@@ -235,7 +298,7 @@ export default function ProfileScreen() {
             </View>
             <ChevronRight size={20} color={colors.textLight} />
           </TouchableOpacity>
-          
+
           <TouchableOpacity style={styles.settingItem}>
             <View style={styles.settingIconContainer}>
               <Shield size={20} color={colors.primary} />
@@ -246,23 +309,21 @@ export default function ProfileScreen() {
             <ChevronRight size={20} color={colors.textLight} />
           </TouchableOpacity>
         </View>
-        
-        <TouchableOpacity 
+
+        <TouchableOpacity
           style={styles.logoutButton}
           onPress={handleLogout}
         >
           <LogOut size={20} color={colors.error} />
           <Text style={styles.logoutText}>Logout</Text>
         </TouchableOpacity>
-        
+
         <View style={styles.versionContainer}>
           <Text style={styles.versionText}>Version 1.0.0</Text>
         </View>
-        
+
         <View style={styles.spacer} />
       </ScrollView>
-      
-      <CartButton />
     </SafeAreaView>
   );
 }
@@ -271,6 +332,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   header: {
     backgroundColor: colors.white,
@@ -287,6 +353,7 @@ const styles = StyleSheet.create({
     width: 70,
     height: 70,
     borderRadius: 35,
+    backgroundColor: colors.border,
   },
   profileInfo: {
     flex: 1,
@@ -365,15 +432,18 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   horizontalList: {
-    paddingRight: 16,
+    paddingLeft: 16,
+    paddingRight: 0,
+    marginTop: 8,
   },
   dishCardContainer: {
     width: 200,
-    marginRight: 16,
+    marginRight: 12,
   },
   emptyContainer: {
     alignItems: 'center',
-    padding: 24,
+    paddingVertical: 32,
+    minHeight: 150,
   },
   emptyText: {
     fontSize: 16,
@@ -390,18 +460,18 @@ const styles = StyleSheet.create({
   settingItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
   settingIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: `${colors.primary}20`,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: `${colors.primary}15`,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginRight: 16,
   },
   settingContent: {
     flex: 1,
@@ -416,7 +486,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.white,
     paddingVertical: 16,
-    marginTop: 8,
+    marginTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
   logoutText: {
     fontSize: 16,
@@ -426,13 +498,13 @@ const styles = StyleSheet.create({
   },
   versionContainer: {
     alignItems: 'center',
-    marginTop: 16,
+    marginTop: 24,
+    paddingBottom: 16,
   },
   versionText: {
     fontSize: 12,
     color: colors.textLight,
   },
   spacer: {
-    height: 80,
   },
 });

@@ -1,33 +1,45 @@
 import React from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  ScrollView, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
   TouchableOpacity,
   Switch,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { 
-  User, 
-  Store, 
-  Bell, 
-  CreditCard, 
-  MapPin, 
-  Shield, 
-  HelpCircle, 
+import {
+  User,
+  Store,
+  Bell,
+  CreditCard,
+  MapPin,
+  Shield,
+  HelpCircle,
   LogOut,
   ChevronRight,
 } from 'lucide-react-native';
 import colors from '@/constants/colors';
-import { useUserStore } from '@/store/userStore';
 import { ModeToggle } from '@/components/ModeToggle';
 
+// --- Convex Imports ---
+import { useQuery } from 'convex/react';
+import { api } from '@/convex/_generated/api';
+import { useAuthActions } from '@convex-dev/auth/react';
+// ---------------------
+
 export default function SettingsScreen() {
-  const { isBusinessMode } = useUserStore();
+  // Fetch user data for role
+  const user = useQuery(api.users.getCurrentUser);
+  const { signOut } = useAuthActions();
+
+  // Determine business mode from user role
+  const isBusinessMode = user?.role === 'business';
+
   const [notificationsEnabled, setNotificationsEnabled] = React.useState(true);
-  
+
   const handleLogout = () => {
     Alert.alert(
       'Logout',
@@ -47,7 +59,7 @@ export default function SettingsScreen() {
       ]
     );
   };
-  
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView>
@@ -57,12 +69,12 @@ export default function SettingsScreen() {
             <ModeToggle />
           </View>
           <Text style={styles.sectionDescription}>
-            {isBusinessMode 
-              ? 'Business mode allows you to manage your restaurants and menus' 
+            {isBusinessMode
+              ? 'Business mode allows you to manage your restaurants and menus'
               : 'Consumer mode allows you to browse and order food'}
           </Text>
         </View>
-        
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
           <TouchableOpacity style={styles.settingItem}>
@@ -74,7 +86,7 @@ export default function SettingsScreen() {
             </View>
             <ChevronRight size={20} color={colors.textLight} />
           </TouchableOpacity>
-          
+
           <TouchableOpacity style={styles.settingItem}>
             <View style={styles.settingIconContainer}>
               <CreditCard size={20} color={colors.primary} />
@@ -84,7 +96,7 @@ export default function SettingsScreen() {
             </View>
             <ChevronRight size={20} color={colors.textLight} />
           </TouchableOpacity>
-          
+
           <TouchableOpacity style={styles.settingItem}>
             <View style={styles.settingIconContainer}>
               <MapPin size={20} color={colors.primary} />
@@ -95,7 +107,7 @@ export default function SettingsScreen() {
             <ChevronRight size={20} color={colors.textLight} />
           </TouchableOpacity>
         </View>
-        
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Preferences</Text>
           <View style={styles.settingItem}>
@@ -113,7 +125,7 @@ export default function SettingsScreen() {
             />
           </View>
         </View>
-        
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Support</Text>
           <TouchableOpacity style={styles.settingItem}>
@@ -125,7 +137,7 @@ export default function SettingsScreen() {
             </View>
             <ChevronRight size={20} color={colors.textLight} />
           </TouchableOpacity>
-          
+
           <TouchableOpacity style={styles.settingItem}>
             <View style={styles.settingIconContainer}>
               <Shield size={20} color={colors.primary} />
@@ -136,15 +148,15 @@ export default function SettingsScreen() {
             <ChevronRight size={20} color={colors.textLight} />
           </TouchableOpacity>
         </View>
-        
-        <TouchableOpacity 
+
+        <TouchableOpacity
           style={styles.logoutButton}
           onPress={handleLogout}
         >
           <LogOut size={20} color={colors.error} />
           <Text style={styles.logoutText}>Logout</Text>
         </TouchableOpacity>
-        
+
         <View style={styles.versionContainer}>
           <Text style={styles.versionText}>Version 1.0.0</Text>
         </View>

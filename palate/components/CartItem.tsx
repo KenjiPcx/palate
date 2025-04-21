@@ -1,38 +1,38 @@
-import React from 'react';
+import type React from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity } from 'react-native';
 import { Minus, Plus, Trash2 } from 'lucide-react-native';
 import colors from '@/constants/colors';
-import { CartItem as CartItemType } from '@/types';
-import { useUserStore } from '@/store/userStore';
+import type { CartItem as CartItemType } from '@/types';
+// import { useUserStore } from '@/store/userStore';
 
 interface CartItemProps {
   item: CartItemType;
 }
 
 export const CartItem: React.FC<CartItemProps> = ({ item }) => {
-  const { updateCartItemQuantity, removeFromCart } = useUserStore();
-  
+  // const { updateCartItemQuantity, removeFromCart } = useUserStore();
+
   const handleIncrement = () => {
-    updateCartItemQuantity(item.dish.id, item.quantity + 1);
+    // // updateCartItemQuantity(item.dish.id, item.quantity + 1);
   };
-  
+
   const handleDecrement = () => {
     if (item.quantity > 1) {
-      updateCartItemQuantity(item.dish.id, item.quantity - 1);
+      // updateCartItemQuantity(item.dish.id, item.quantity - 1);
     } else {
-      removeFromCart(item.dish.id);
+      // removeFromCart(item.dish.id);
     }
   };
-  
+
   const handleRemove = () => {
-    removeFromCart(item.dish.id);
+    // removeFromCart(item.dish.id);
   };
-  
+
   return (
     <View style={styles.container}>
-      <Image 
-        source={{ uri: item.dish.image }} 
-        style={styles.image} 
+      <Image
+        source={{ uri: item.dish.image }}
+        style={styles.image}
         resizeMode="cover"
       />
       <View style={styles.content}>
@@ -43,8 +43,8 @@ export const CartItem: React.FC<CartItemProps> = ({ item }) => {
         )}
       </View>
       <View style={styles.quantityContainer}>
-        <TouchableOpacity 
-          style={styles.quantityButton} 
+        <TouchableOpacity
+          style={styles.quantityButton}
           onPress={handleDecrement}
           activeOpacity={0.8}
         >
@@ -55,8 +55,8 @@ export const CartItem: React.FC<CartItemProps> = ({ item }) => {
           )}
         </TouchableOpacity>
         <Text style={styles.quantity}>{item.quantity}</Text>
-        <TouchableOpacity 
-          style={styles.quantityButton} 
+        <TouchableOpacity
+          style={styles.quantityButton}
           onPress={handleIncrement}
           activeOpacity={0.8}
         >

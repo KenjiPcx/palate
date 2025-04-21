@@ -1,40 +1,71 @@
-import React, { useState } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  ScrollView, 
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
   TextInput,
   TouchableOpacity,
   Image,
   Alert,
-  Slider,
+  FlatList,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Image as ImageIcon, X } from 'lucide-react-native';
+import { Image as ImageIcon, X, PlusCircle } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import colors from '@/constants/colors';
-import { useRestaurantStore } from '@/store/restaurantStore';
 import { Button } from '@/components/Button';
 import { TasteProfileRadar } from '@/components/TasteProfileRadar';
-import { TasteProfile } from '@/types';
-import { generateId } from '@/utils/helpers';
+import type { TasteProfile } from '@/types';
+import { useQuery, useMutation, useAction } from 'convex/react';
+import { api } from '@/convex/_generated/api';
+import type { Id } from '@/convex/_generated/dataModel';
+
+async function uploadFile(uploadUrl: string, fileUri: string): Promise<Id<"_storage">> {
+  const response = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'image/jpeg' },
+    body: await fetch(fileUri).then(res => res.blob()),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Upload failed: ${response.status} ${response.statusText} - ${errorBody}`);
+  }
+
+  const { storageId } = await response.json();
+  if (!storageId) {
+    throw new Error("Upload succeeded but storageId not found in response.");
+  }
+  return storageId as Id<"_storage">;
+}
+
+interface ImageState {
+  url: string;
+  uri: string;
+}
 
 export default function AddDishScreen() {
-  const { restaurantId } = useLocalSearchParams<{ restaurantId: string }>();
+  const { restaurantId: restaurantIdString } = useLocalSearchParams<{ restaurantId: string }>();
   const router = useRouter();
-  const { getRestaurantById, addDish } = useRestaurantStore();
-  
-  const restaurant = getRestaurantById(restaurantId);
-  
+  const restaurantId = restaurantIdString as Id<"restaurants">;
+  const createDishMutation = useMutation(api.dishes.createDish);
+  const updateDishAction = useAction(api.dishes.updateDishAction);
+  const linkImagesMutation = useMutation(api.dishes.linkDishImagesAndUpdate);
+
+  const restaurantData = useQuery(api.restaurants.getRestaurantForUser, restaurantId ? { restaurantId } : 'skip');
+
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [price, setPrice] = useState('');
   const [category, setCategory] = useState('');
-  const [image, setImage] = useState<string | null>(null);
+  const [isAvailable, setIsAvailable] = useState(true);
+  const [dietaryFlags, setDietaryFlags] = useState<string[]>([]);
+  const [images, setImages] = useState<ImageState[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  
+
   const [tasteProfile, setTasteProfile] = useState<TasteProfile>({
     sweet: 0.5,
     salty: 0.5,
@@ -43,86 +74,152 @@ export default function AddDishScreen() {
     umami: 0.5,
     spicy: 0.5,
   });
-  
-  if (!restaurant) {
+
+  useEffect(() => {
+    if (restaurantData === null) {
+      Alert.alert("Error", "Restaurant not found or you don't have permission to add dishes to it.", [
+        { text: "OK", onPress: () => router.back() }
+      ]);
+    }
+  }, [restaurantData, router]);
+
+  if (restaurantData === undefined && restaurantId) {
     return (
-      <View style={styles.notFoundContainer}>
-        <Text style={styles.notFoundText}>Restaurant not found</Text>
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text>Loading restaurant data...</Text>
       </View>
     );
   }
-  
-  const handlePickImage = async () => {
+
+  const handleAddImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
-      aspect: [4, 3],
-      quality: 1,
+      aspect: [1, 1],
+      quality: 0.8,
     });
-    
-    if (!result.canceled) {
-      setImage(result.assets[0].uri);
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const newUri = result.assets[0].uri;
+      setImages(prev => [...prev, { url: newUri, uri: newUri }]);
     }
   };
-  
-  const handleTasteProfileChange = (taste: keyof TasteProfile, value: number) => {
-    setTasteProfile(prev => ({
-      ...prev,
-      [taste]: value,
-    }));
+
+  const handleRemoveImage = (indexToRemove: number) => {
+    setImages(prev => prev.filter((_, index) => index !== indexToRemove));
   };
-  
-  const handleSubmit = () => {
-    if (!name || !description || !price || !category || !image) {
-      Alert.alert('Error', 'Please fill in all fields and add an image');
+
+  const handleTasteProfileChange = (taste: keyof TasteProfile, value: number) => {
+    setTasteProfile(prev => ({ ...prev, [taste]: value }));
+  };
+
+  const handleSubmit = async () => {
+    if (!restaurantId) {
+      Alert.alert('Error', 'Restaurant ID is missing.');
       return;
     }
-    
-    const priceValue = parseFloat(price);
-    if (isNaN(priceValue) || priceValue <= 0) {
+    if (!name || !description || !price || !category) {
+      Alert.alert('Error', 'Please fill in Name, Description, Price, and Category.');
+      return;
+    }
+    if (images.length === 0) {
+      Alert.alert('Error', 'Please add at least one image for the dish.');
+      return;
+    }
+
+    const priceValue = Number.parseFloat(price);
+    if (Number.isNaN(priceValue) || priceValue <= 0) {
       Alert.alert('Error', 'Please enter a valid price');
       return;
     }
-    
+
     setIsLoading(true);
-    
-    // Simulate API call
-    setTimeout(() => {
-      const newDish = {
-        id: `dish-${generateId()}`,
+
+    try {
+      console.log("Creating dish...");
+      const newDishId = await createDishMutation({
+        restaurantId,
         name,
         description,
         price: priceValue,
-        image,
-        tasteProfile,
         category,
-        reviews: [],
-        averageRating: 0,
-        restaurantId,
-      };
-      
-      addDish(restaurantId, newDish);
-      setIsLoading(false);
-      
+        tasteProfile,
+        dietaryFlags,
+        isAvailable,
+      });
+      console.log("Dish created with ID:", newDishId);
+
+      if (images.length > 0) {
+        console.log(`Requesting ${images.length} upload URLs for new dish ${newDishId}...`);
+        const { uploadUrls } = await updateDishAction({
+          dishId: newDishId,
+          newImageCount: images.length
+        });
+        console.log("Received URLs:", uploadUrls);
+
+        if (uploadUrls.length !== images.length) {
+          throw new Error("Mismatch between requested and received upload URLs.");
+        }
+
+        console.log("Uploading images...");
+        const uploadPromises = images.map((imageState, index) =>
+          uploadFile(uploadUrls[index], imageState.uri)
+            .then(storageId => {
+              console.log(`Image ${index + 1} upload successful, storageId:`, storageId);
+              return storageId;
+            })
+            .catch(err => {
+              console.error(`Image ${index + 1} upload failed:`, err);
+              throw new Error(`Failed to upload image ${index + 1}.`);
+            })
+        );
+
+        const uploadedImageIds = await Promise.all(uploadPromises);
+        console.log("Uploads complete. New Storage IDs:", uploadedImageIds);
+
+        console.log("Linking images to dish...");
+        await linkImagesMutation({
+          dishId: newDishId,
+          imageIds: uploadedImageIds,
+        });
+        console.log("Images linked successfully.");
+      }
+
       Alert.alert(
         'Success',
         'Dish added successfully',
-        [
-          {
-            text: 'OK',
-            onPress: () => router.back(),
-          },
-        ]
+        [{ text: 'OK', onPress: () => router.back() }]
       );
-    }, 1500);
+
+    } catch (error) {
+      console.error('Failed to add dish:', error);
+      Alert.alert('Error', `Failed to add dish: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setIsLoading(false);
+    }
   };
-  
+
+  const renderImageItem = ({ item, index }: { item: ImageState; index: number }) => (
+    <View style={styles.imageListItem}>
+      <Image source={{ uri: item.url }} style={styles.imagePreview} />
+      <TouchableOpacity
+        style={styles.removeImageButton}
+        onPress={() => handleRemoveImage(index)}
+        disabled={isLoading}
+      >
+        <X size={16} color={colors.white} />
+      </TouchableOpacity>
+    </View>
+  );
+
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView>
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Dish Information</Text>
-          
+          <Text style={styles.sectionTitle}>Add New Dish</Text>
+          <Text style={styles.restaurantName}>To: {restaurantData?.name ?? '...'}</Text>
+
           <View style={styles.formGroup}>
             <Text style={styles.label}>Name</Text>
             <TextInput
@@ -130,9 +227,10 @@ export default function AddDishScreen() {
               value={name}
               onChangeText={setName}
               placeholder="Dish name"
+              editable={!isLoading}
             />
           </View>
-          
+
           <View style={styles.formGroup}>
             <Text style={styles.label}>Description</Text>
             <TextInput
@@ -142,9 +240,10 @@ export default function AddDishScreen() {
               placeholder="Describe your dish"
               multiline
               numberOfLines={4}
+              editable={!isLoading}
             />
           </View>
-          
+
           <View style={styles.formGroup}>
             <Text style={styles.label}>Price ($)</Text>
             <TextInput
@@ -153,9 +252,10 @@ export default function AddDishScreen() {
               onChangeText={setPrice}
               placeholder="0.00"
               keyboardType="decimal-pad"
+              editable={!isLoading}
             />
           </View>
-          
+
           <View style={styles.formGroup}>
             <Text style={styles.label}>Category</Text>
             <TextInput
@@ -163,155 +263,76 @@ export default function AddDishScreen() {
               value={category}
               onChangeText={setCategory}
               placeholder="e.g. Appetizer, Main Course, Dessert"
+              editable={!isLoading}
             />
           </View>
         </View>
-        
+
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Dish Image</Text>
-          
-          {image ? (
-            <View style={styles.imagePreviewContainer}>
-              <Image 
-                source={{ uri: image }} 
-                style={styles.imagePreview} 
-              />
-              <TouchableOpacity 
-                style={styles.removeImageButton}
-                onPress={() => setImage(null)}
+          <Text style={styles.sectionTitle}>Dish Images</Text>
+
+          <FlatList
+            data={images}
+            renderItem={renderImageItem}
+            keyExtractor={(item, index) => `new-image-${index}`}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.imageList}
+            ListFooterComponent={() => (
+              <TouchableOpacity
+                style={styles.addImageButton}
+                onPress={handleAddImage}
+                disabled={isLoading}
               >
-                <X size={16} color={colors.white} />
+                <PlusCircle size={30} color={colors.primary} />
+                <Text style={styles.addImageText}>Add</Text>
               </TouchableOpacity>
-            </View>
-          ) : (
-            <TouchableOpacity 
-              style={styles.imagePicker}
-              onPress={handlePickImage}
-            >
-              <ImageIcon size={24} color={colors.textLight} />
-              <Text style={styles.imagePickerText}>Upload Dish Image</Text>
-            </TouchableOpacity>
-          )}
+            )}
+          />
         </View>
-        
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Taste Profile</Text>
           <Text style={styles.sectionDescription}>
-            Adjust the sliders to set the taste profile of your dish
+            Adjust the sliders to set the initial taste profile
           </Text>
-          
+
           <View style={styles.tasteProfileContainer}>
-            <TasteProfileRadar 
-              tasteProfile={tasteProfile} 
+            <TasteProfileRadar
+              tasteProfile={tasteProfile}
               showValues
+              size={250}
             />
           </View>
-          
+
           <View style={styles.slidersContainer}>
-            <View style={styles.sliderItem}>
-              <Text style={styles.sliderLabel}>Sweet</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0}
-                maximumValue={1}
-                step={0.1}
-                value={tasteProfile.sweet}
-                onValueChange={(value) => handleTasteProfileChange('sweet', value)}
-                minimumTrackTintColor={colors.primary}
-                maximumTrackTintColor={colors.border}
-                thumbTintColor={colors.primary}
-              />
-              <Text style={styles.sliderValue}>{Math.round(tasteProfile.sweet * 10)}</Text>
-            </View>
-            
-            <View style={styles.sliderItem}>
-              <Text style={styles.sliderLabel}>Salty</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0}
-                maximumValue={1}
-                step={0.1}
-                value={tasteProfile.salty}
-                onValueChange={(value) => handleTasteProfileChange('salty', value)}
-                minimumTrackTintColor={colors.primary}
-                maximumTrackTintColor={colors.border}
-                thumbTintColor={colors.primary}
-              />
-              <Text style={styles.sliderValue}>{Math.round(tasteProfile.salty * 10)}</Text>
-            </View>
-            
-            <View style={styles.sliderItem}>
-              <Text style={styles.sliderLabel}>Sour</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0}
-                maximumValue={1}
-                step={0.1}
-                value={tasteProfile.sour}
-                onValueChange={(value) => handleTasteProfileChange('sour', value)}
-                minimumTrackTintColor={colors.primary}
-                maximumTrackTintColor={colors.border}
-                thumbTintColor={colors.primary}
-              />
-              <Text style={styles.sliderValue}>{Math.round(tasteProfile.sour * 10)}</Text>
-            </View>
-            
-            <View style={styles.sliderItem}>
-              <Text style={styles.sliderLabel}>Bitter</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0}
-                maximumValue={1}
-                step={0.1}
-                value={tasteProfile.bitter}
-                onValueChange={(value) => handleTasteProfileChange('bitter', value)}
-                minimumTrackTintColor={colors.primary}
-                maximumTrackTintColor={colors.border}
-                thumbTintColor={colors.primary}
-              />
-              <Text style={styles.sliderValue}>{Math.round(tasteProfile.bitter * 10)}</Text>
-            </View>
-            
-            <View style={styles.sliderItem}>
-              <Text style={styles.sliderLabel}>Umami</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0}
-                maximumValue={1}
-                step={0.1}
-                value={tasteProfile.umami}
-                onValueChange={(value) => handleTasteProfileChange('umami', value)}
-                minimumTrackTintColor={colors.primary}
-                maximumTrackTintColor={colors.border}
-                thumbTintColor={colors.primary}
-              />
-              <Text style={styles.sliderValue}>{Math.round(tasteProfile.umami * 10)}</Text>
-            </View>
-            
-            <View style={styles.sliderItem}>
-              <Text style={styles.sliderLabel}>Spicy</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0}
-                maximumValue={1}
-                step={0.1}
-                value={tasteProfile.spicy}
-                onValueChange={(value) => handleTasteProfileChange('spicy', value)}
-                minimumTrackTintColor={colors.primary}
-                maximumTrackTintColor={colors.border}
-                thumbTintColor={colors.primary}
-              />
-              <Text style={styles.sliderValue}>{Math.round(tasteProfile.spicy * 10)}</Text>
-            </View>
+            {Object.keys(tasteProfile).map((key) => (
+              <View key={key} style={styles.sliderItem}>
+                <Text style={styles.sliderLabel}>{key.charAt(0).toUpperCase() + key.slice(1)}</Text>
+                <TextInput
+                  style={styles.sliderValueInput}
+                  value={tasteProfile[key as keyof TasteProfile].toFixed(2)}
+                  onChangeText={(text) => {
+                    const numValue = Number.parseFloat(text);
+                    if (!Number.isNaN(numValue) && numValue >= 0 && numValue <= 1) {
+                      handleTasteProfileChange(key as keyof TasteProfile, numValue);
+                    }
+                  }}
+                  keyboardType="numeric"
+                  editable={!isLoading}
+                />
+              </View>
+            ))}
           </View>
         </View>
       </ScrollView>
-      
+
       <View style={styles.footer}>
         <Button
           title="Add Dish"
           onPress={handleSubmit}
           loading={isLoading}
+          disabled={isLoading || restaurantData === undefined || restaurantData === null}
         />
       </View>
     </SafeAreaView>
@@ -323,120 +344,149 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+  },
   section: {
-    backgroundColor: colors.white,
-    marginBottom: 16,
-    padding: 16,
+    marginHorizontal: 20,
+    marginVertical: 15,
+    padding: 20,
+    backgroundColor: colors.card,
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 3,
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: 'bold',
     color: colors.text,
-    marginBottom: 8,
+    marginBottom: 5,
+  },
+  restaurantName: {
+    fontSize: 14,
+    color: colors.textLight,
+    marginBottom: 15,
   },
   sectionDescription: {
     fontSize: 14,
     color: colors.textLight,
-    marginBottom: 16,
+    marginBottom: 15,
   },
   formGroup: {
-    marginBottom: 16,
+    marginBottom: 15,
   },
   label: {
     fontSize: 14,
-    fontWeight: '500',
-    color: colors.text,
-    marginBottom: 8,
+    color: colors.textLight,
+    marginBottom: 5,
   },
   input: {
+    backgroundColor: colors.white,
+    borderRadius: 8,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: colors.text,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    color: colors.text,
   },
   textArea: {
     minHeight: 100,
     textAlignVertical: 'top',
   },
-  imagePicker: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
-    borderStyle: 'dashed',
-    padding: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
+  imageList: {
+    marginBottom: 15,
   },
-  imagePickerText: {
-    fontSize: 14,
-    color: colors.textLight,
-    marginTop: 8,
-  },
-  imagePreviewContainer: {
+  imageListItem: {
+    marginRight: 10,
     position: 'relative',
   },
   imagePreview: {
-    width: '100%',
-    height: 200,
+    width: 100,
+    height: 100,
     borderRadius: 8,
+    backgroundColor: colors.white,
   },
   removeImageButton: {
     position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
+    top: -5,
+    right: -5,
+    backgroundColor: colors.error,
+    borderRadius: 15,
+    width: 24,
+    height: 24,
     justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  addImageButton: {
+    width: 100,
+    height: 100,
+    borderRadius: 8,
+    backgroundColor: colors.white,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderStyle: 'dashed',
+  },
+  addImageText: {
+    marginTop: 5,
+    color: colors.primary,
+    fontSize: 14,
   },
   tasteProfileContainer: {
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 20,
+    minHeight: 260,
   },
   slidersContainer: {
-    marginTop: 16,
+    marginTop: 10,
   },
   sliderItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 10,
   },
   sliderLabel: {
-    width: 50,
+    width: 60,
     fontSize: 14,
     color: colors.text,
+    marginRight: 10,
   },
-  slider: {
+  sliderValueInput: {
     flex: 1,
     height: 40,
-  },
-  sliderValue: {
-    width: 30,
-    textAlign: 'right',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 5,
+    paddingHorizontal: 10,
     fontSize: 14,
-    color: colors.text,
+    marginLeft: 10,
+    textAlign: 'center',
   },
   footer: {
-    backgroundColor: colors.white,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
+    padding: 20,
     borderTopWidth: 1,
     borderTopColor: colors.border,
+    backgroundColor: colors.card,
   },
   notFoundContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 20,
+    backgroundColor: colors.background,
   },
   notFoundText: {
     fontSize: 18,
-    fontWeight: '500',
     color: colors.text,
+    textAlign: 'center',
   },
 });

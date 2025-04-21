@@ -1,12 +1,15 @@
-import React from 'react';
+import type React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { User, Store } from 'lucide-react-native';
 import colors from '@/constants/colors';
-import { useUserStore } from '@/store/userStore';
 
 export const ModeToggle: React.FC = () => {
-  const { isBusinessMode, toggleBusinessMode } = useUserStore();
-  
+  // const { isBusinessMode, toggleBusinessMode } = useUserStore();
+  const isBusinessMode = false;
+  const toggleBusinessMode = () => {
+    console.log('toggleBusinessMode');
+  };
+
   return (
     <View style={styles.container}>
       <TouchableOpacity
@@ -17,9 +20,9 @@ export const ModeToggle: React.FC = () => {
         onPress={() => !isBusinessMode || toggleBusinessMode()}
         activeOpacity={0.8}
       >
-        <User 
-          size={20} 
-          color={!isBusinessMode ? colors.white : colors.text} 
+        <User
+          size={20}
+          color={!isBusinessMode ? colors.white : colors.text}
         />
         <Text
           style={[
@@ -38,9 +41,9 @@ export const ModeToggle: React.FC = () => {
         onPress={() => isBusinessMode || toggleBusinessMode()}
         activeOpacity={0.8}
       >
-        <Store 
-          size={20} 
-          color={isBusinessMode ? colors.white : colors.text} 
+        <Store
+          size={20}
+          color={isBusinessMode ? colors.white : colors.text}
         />
         <Text
           style={[

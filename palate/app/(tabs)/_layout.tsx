@@ -2,11 +2,14 @@ import React from "react";
 import { Tabs } from "expo-router";
 import { Home, Search, ShoppingBag, User, Inbox } from "lucide-react-native";
 import colors from "@/constants/colors";
-import { useUserStore } from "@/store/userStore";
+// import { useUserStore } from "@/store/userStore"; // Removed Zustand dependency
 
 export default function TabLayout() {
-  const pendingRatings = useUserStore(state => state.user?.pendingRatings || []);
-  const hasPendingRatings = pendingRatings.length > 0;
+  // TODO: Implement fetching pending ratings/notifications via Convex query
+  // const pendingRatings = useUserStore(state => state.user?.pendingRatings || []);
+  // const hasPendingRatings = pendingRatings.length > 0;
+  const hasPendingRatings = false; // Placeholder
+  const pendingRatingsCount = 0; // Placeholder
 
   return (
     <Tabs
@@ -65,7 +68,7 @@ export default function TabLayout() {
         options={{
           title: "Inbox",
           tabBarIcon: ({ color }) => <Inbox size={24} color={color} />,
-          tabBarBadge: hasPendingRatings ? pendingRatings.length : undefined,
+          tabBarBadge: hasPendingRatings ? pendingRatingsCount : undefined,
           tabBarBadgeStyle: {
             backgroundColor: colors.primary,
           },
