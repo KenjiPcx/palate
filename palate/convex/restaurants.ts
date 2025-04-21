@@ -72,7 +72,6 @@ export const createRestaurant = mutation({
  */
 export const getMyRestaurants = query({
   args: {},
-  returns: v.array(restaurantValidator),
   handler: async (ctx): Promise<Doc<"restaurants">[]> => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) {
@@ -110,7 +109,6 @@ export const getAll = query({
  */
 export const getRestaurantForUser = query({
   args: { restaurantId: v.id("restaurants") },
-  returns: v.union(v.null(), restaurantValidator),
   handler: async (ctx, args): Promise<Doc<"restaurants"> | null> => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) {
@@ -140,7 +138,6 @@ export const getRestaurantForUser = query({
  */
 export const getRestaurantById = query({
   args: { restaurantId: v.id("restaurants") },
-  returns: v.union(v.null(), restaurantWithImageUrlsValidator),
   handler: async (ctx, args): Promise<Infer<typeof restaurantWithImageUrlsValidator> | null> => {
     const restaurant = await ctx.db.get(args.restaurantId);
     if (!restaurant) {

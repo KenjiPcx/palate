@@ -30,7 +30,6 @@ import colors from '@/constants/colors';
 import { TasteProfileRadar } from '@/components/TasteProfileRadar';
 import { DishCard } from '@/components/DishCard';
 import { SectionHeader } from '@/components/SectionHeader';
-import { ModeToggle } from '@/components/ModeToggle';
 import type { Id } from '@/convex/_generated/dataModel';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
@@ -152,9 +151,6 @@ export default function ProfileScreen() {
 
         <View style={styles.section}>
           <SectionHeader title="App Mode" />
-          <View style={styles.modeToggleContainer}>
-            <ModeToggle />
-          </View>
           <Text style={styles.sectionDescription}>
             {user.role === 'business'
               ? 'Business mode allows you to manage your restaurants and menus'

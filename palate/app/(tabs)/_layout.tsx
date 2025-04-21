@@ -1,8 +1,10 @@
 import React from "react";
 import { Tabs } from "expo-router";
-import { Home, Search, ShoppingBag, User, Inbox } from "lucide-react-native";
+import { Home, Search, ShoppingBag, User, Inbox, Store, Settings } from "lucide-react-native";
 import colors from "@/constants/colors";
 // import { useUserStore } from "@/store/userStore"; // Removed Zustand dependency
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 
 export default function TabLayout() {
   // TODO: Implement fetching pending ratings/notifications via Convex query
@@ -10,6 +12,10 @@ export default function TabLayout() {
   // const hasPendingRatings = pendingRatings.length > 0;
   const hasPendingRatings = false; // Placeholder
   const pendingRatingsCount = 0; // Placeholder
+
+  const user = useQuery(api.users.getCurrentUser);
+  const isBusinessUser = user?.role === 'business';
+  console.log("isBusinessUser", isBusinessUser);
 
   return (
     <Tabs
@@ -63,6 +69,15 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <ShoppingBag size={24} color={color} />,
         }}
       />
+      {isBusinessUser && (
+        <Tabs.Screen
+          name="manage"
+          options={{
+            title: "Manage",
+            tabBarIcon: ({ color }) => <Store size={24} color={color} />,
+          }}
+        />
+      )}
       <Tabs.Screen
         name="inbox"
         options={{
